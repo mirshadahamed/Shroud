@@ -5,120 +5,108 @@ import Combine
 @MainActor
 final class PrivacyController: ObservableObject {
 
-    // MARK: - Published State
-
     @Published private(set) var isProtected = false
 
-    // MARK: - Overlay Manager
-
     private let overlay = BlurOverlayManager()
-
-    // MARK: - Tasks
 
     private var activationTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?
 
-    // MARK: - Update Head Direction
+    private var lastState: GazeState = .unknown
+
+    // MARK: - Timing
+
+    private let activationDelay: Duration = .milliseconds(900)
+    private let recoveryDelay: Duration = .milliseconds(350)
+
+    // MARK: - Gaze Updates
 
     func update(_ state: GazeState) {
+        lastState = state
 
-        // Cancel any pending activation.
-        activationTask?.cancel()
-        activationTask = nil
+        switch state {
+        case .facingScreen:
+            activationTask?.cancel()
+            activationTask = nil
 
-        // User is facing the screen.
-        if state == .facingScreen {
-            hide()
-            return
-        }
+            // Require stable facing detection before clearing.
+            guard isProtected else { return }
 
-        // Only activate for confirmed head turns
-        // or when the face is missing.
-        guard state == .lookingAway ||
-              state == .noFace else {
-            return
-        }
+            guard recoveryTask == nil else { return }
 
-        // Don't create another overlay if already active.
-        guard !isProtected else {
-            return
-        }
+            recoveryTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: recoveryDelay)
+                } catch {
+                    return
+                }
 
-        // Wait briefly to avoid flashing the overlay
-        // during normal head movements.
-        activationTask = Task { @MainActor in
+                guard !Task.isCancelled,
+                      lastState == .facingScreen else {
+                    return
+                }
 
-            do {
-                try await Task.sleep(
-                    for: .milliseconds(900)
-                )
-            } catch {
-                return
+                hideOverlay()
             }
 
-            guard !Task.isCancelled else {
-                return
+        case .lookingAway, .noFace:
+            recoveryTask?.cancel()
+            recoveryTask = nil
+
+            guard !isProtected else { return }
+            guard activationTask == nil else { return }
+
+            activationTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: activationDelay)
+                } catch {
+                    return
+                }
+
+                guard !Task.isCancelled,
+                      lastState == .lookingAway ||
+                      lastState == .noFace else {
+                    return
+                }
+
+                activationTask = nil
+                overlay.show()
+                isProtected = overlay.isVisible
             }
 
-            show()
+        case .unknown:
+            // An unknown measurement should not immediately
+            // activate or clear the overlay.
+            activationTask?.cancel()
+            activationTask = nil
+
+            recoveryTask?.cancel()
+            recoveryTask = nil
         }
     }
 
-    // MARK: - Show Privacy Overlay
+    // MARK: - Clear Overlay
 
-    private func show() {
-
-        guard !isProtected else {
-            return
-        }
-
-        overlay.show()
-        isProtected = overlay.isVisible
-
-        guard isProtected else {
-            return
-        }
-
-        // Cancel any previous recovery timer.
-        recoveryTask?.cancel()
-
-        // Safety fallback:
-        // Automatically clear the overlay after 5 seconds.
-        recoveryTask = Task { @MainActor in
-
-            do {
-                try await Task.sleep(
-                    for: .seconds(5)
-                )
-            } catch {
-                return
-            }
-
-            guard !Task.isCancelled else {
-                return
-            }
-
-            hide()
-        }
-    }
-
-    // MARK: - Hide Privacy Overlay
-
-    func hide() {
-
-        // Cancel pending activation.
-        activationTask?.cancel()
-        activationTask = nil
-
-        // Cancel the automatic recovery timer.
+    private func hideOverlay() {
         recoveryTask?.cancel()
         recoveryTask = nil
 
-        // Only hide if protection is active.
-        if isProtected || overlay.isVisible {
-            overlay.hide()
-        }
+        overlay.hide()
+        isProtected = false
+    }
 
+    // MARK: - Emergency Stop / Manual Clear
+
+    func hide() {
+        activationTask?.cancel()
+        activationTask = nil
+
+        recoveryTask?.cancel()
+        recoveryTask = nil
+
+        lastState = .unknown
+
+        overlay.hide()
         isProtected = false
     }
 }
