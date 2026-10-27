@@ -10,18 +10,29 @@
     <key>CFBundleName</key>
     <string>Shroud</string>
 
+    <key>CFBundleDisplayName</key>
+    <string>Shroud</string>
+
     <key>CFBundleExecutable</key>
     <string>Shroud</string>
 
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 
+    <key>CFBundleIconFile</key>
+    <string>Shroud.icns</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+
     <key>NSCameraUsageDescription</key>
-    <string>
-    Shroud uses your Mac camera to detect when
-    you look away and automatically blur your screen.
-    Camera frames are processed locally.
-    </string>
+    <string>Shroud uses your Mac camera to detect when you look away and automatically protect your screen. Camera frames are processed locally on your Mac.</string>
 
     <key>LSUIElement</key>
     <true/>
