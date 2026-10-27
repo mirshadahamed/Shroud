@@ -25,33 +25,29 @@ final class ShroudAppController: ObservableObject {
         hotkey?.register()
     }
 
-    // MARK: - Persistent Camera Observation
+    // MARK: - Persistent Observation
 
     private func setupObservers() {
 
-        // Forward camera changes to SwiftUI.
         camera.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
 
-        // Forward privacy changes to SwiftUI.
         privacy.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
 
-        // Forward settings changes to SwiftUI.
         settings.objectWillChange
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
             .store(in: &cancellables)
 
-        // Connect gaze detection directly to privacy.
-        // This continues working when the menu is closed.
+        // Camera gaze detection.
         camera.$gazeState
             .receive(on: DispatchQueue.main)
             .sink { [weak self] state in
@@ -63,7 +59,7 @@ final class ShroudAppController: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // Remove the overlay when the camera stops.
+        // Remove overlay when camera stops.
         camera.$isRunning
             .receive(on: DispatchQueue.main)
             .sink { [weak self] running in
@@ -72,6 +68,33 @@ final class ShroudAppController: ObservableObject {
                 if !running {
                     self.privacy.hide()
                 }
+            }
+            .store(in: &cancellables)
+
+        // MARK: - Live Head-Turn Sensitivity
+
+        settings.$yawThreshold
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in
+                self?.camera.setYawThreshold(value)
+            }
+            .store(in: &cancellables)
+
+        // MARK: - Live Overlay Opacity
+
+        settings.$overlayOpacity
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in
+                self?.privacy.setOverlayOpacity(value)
+            }
+            .store(in: &cancellables)
+
+        // MARK: - Live Activation Delay
+
+        settings.$activationDelay
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in
+                self?.privacy.setActivationDelay(value)
             }
             .store(in: &cancellables)
     }
@@ -104,7 +127,7 @@ final class ShroudAppController: ObservableObject {
     }
 }
 
-// MARK: - Menu Content
+// MARK: - Menu Bar Content
 
 private struct ShroudMenuView: View {
 
@@ -113,11 +136,13 @@ private struct ShroudMenuView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+
         VStack(alignment: .leading, spacing: 14) {
 
             // MARK: - Header
 
             HStack(spacing: 12) {
+
                 Image(systemName: "shield.lefthalf.filled")
                     .font(.title2)
                     .foregroundStyle(.blue)
@@ -139,6 +164,7 @@ private struct ShroudMenuView: View {
             // MARK: - Camera Status
 
             HStack(spacing: 8) {
+
                 Circle()
                     .fill(
                         controller.camera.isRunning
@@ -154,7 +180,9 @@ private struct ShroudMenuView: View {
             // MARK: - Head Detection
 
             if controller.camera.isRunning {
+
                 HStack(spacing: 8) {
+
                     Image(
                         systemName:
                             controller.camera.gazeState == .facingScreen
@@ -177,6 +205,7 @@ private struct ShroudMenuView: View {
             // MARK: - Overlay Status
 
             if controller.privacy.isProtected {
+
                 Label(
                     "Privacy overlay active",
                     systemImage: "shield.fill"
@@ -204,6 +233,7 @@ private struct ShroudMenuView: View {
             .buttonStyle(.borderedProminent)
 
             if controller.privacy.isProtected {
+
                 Button {
                     controller.privacy.hide()
                 } label: {
@@ -230,11 +260,13 @@ private struct ShroudMenuView: View {
             // MARK: - Settings
 
             Button {
+
                 NSApplication.shared.activate(
                     ignoringOtherApps: true
                 )
 
                 openWindow(id: "settings")
+
             } label: {
                 Label(
                     "Settings...",
@@ -281,25 +313,29 @@ struct Shroud: App {
 
     var body: some Scene {
 
-        // MARK: - Menu Bar
-
         MenuBarExtra(
             "Shroud",
             systemImage: controller.camera.isRunning
                 ? "eye.fill"
                 : "eye"
         ) {
-            ShroudMenuView(controller: controller)
+            ShroudMenuView(
+                controller: controller
+            )
         }
         .menuBarExtraStyle(.window)
 
-        // MARK: - Settings Window
-
-        Window("Shroud Settings", id: "settings") {
+        Window(
+            "Shroud Settings",
+            id: "settings"
+        ) {
             SettingsView(
                 settings: controller.settings
             )
         }
-        .defaultSize(width: 440, height: 360)
+        .defaultSize(
+            width: 440,
+            height: 360
+        )
     }
 }

@@ -5,10 +5,31 @@ import Foundation
 @MainActor
 final class BlurOverlayManager {
 
-    // Keep strong references to all overlay windows.
+    // MARK: - Properties
+
+    // Keep strong references to overlay windows.
     private var windows: [NSWindow] = []
 
     private(set) var isVisible = false
+
+    // MARK: - Adjustable Opacity
+
+    var opacity: Double = 0.92 {
+        didSet {
+            let clamped = min(max(opacity, 0.6), 1.0)
+
+            if opacity != clamped {
+                opacity = clamped
+                return
+            }
+
+            // Update all currently visible overlays.
+            for window in windows {
+                window.backgroundColor =
+                    NSColor.black.withAlphaComponent(opacity)
+            }
+        }
+    }
 
     // MARK: - Show Privacy Overlay
 
@@ -20,6 +41,7 @@ final class BlurOverlayManager {
         // Remove any previous overlay windows.
         hide()
 
+        // Create one privacy window per connected display.
         for screen in NSScreen.screens {
 
             let window = NSWindow(
@@ -29,25 +51,26 @@ final class BlurOverlayManager {
                 defer: false
             )
 
-            // Position each window on its display.
+            // Position window on the corresponding monitor.
             window.setFrame(
                 screen.frame,
                 display: true
             )
 
-            // Keep the privacy overlay above normal windows.
+            // Keep overlay above normal application windows.
             window.level = .screenSaver
 
+            // Apply the configured opacity.
             window.backgroundColor =
-                NSColor.black.withAlphaComponent(0.92)
+                NSColor.black.withAlphaComponent(opacity)
 
             window.isOpaque = false
             window.hasShadow = false
 
-            // Allow mouse events to pass through.
+            // Allow mouse input to pass through.
             window.ignoresMouseEvents = true
 
-            // Support Spaces and full-screen applications.
+            // Support multiple Spaces and full-screen apps.
             window.collectionBehavior = [
                 .canJoinAllSpaces,
                 .fullScreenAuxiliary,
@@ -106,7 +129,7 @@ final class BlurOverlayManager {
 
             window.contentView = content
 
-            // Show without making Shroud the active app.
+            // Show without activating Shroud.
             window.orderFrontRegardless()
 
             windows.append(window)
@@ -123,21 +146,19 @@ final class BlurOverlayManager {
             return
         }
 
-        // Take ownership of the existing windows before
-        // removing them from the active window collection.
+        // Take ownership of the existing windows.
         let oldWindows = windows
 
         windows = []
         isVisible = false
 
-        // Hide the windows without explicitly closing them.
+        // Hide without explicitly closing the windows.
         for window in oldWindows {
             window.orderOut(nil)
         }
 
-        // Keep references alive until a later main-actor turn.
-        // This is a defensive lifetime measure while
-        // investigating the AppKit crash.
+        // Keep the references alive until a later
+        // main-actor turn to reduce lifecycle issues.
         Task { @MainActor in
             withExtendedLifetime(oldWindows) {}
         }

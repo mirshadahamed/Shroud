@@ -4,6 +4,8 @@ import Vision
 import CoreVideo
 import ImageIO
 
+// MARK: - Gaze States
+
 enum GazeState: String, Sendable {
     case facingScreen = "Facing screen"
     case lookingAway = "Head turned away"
@@ -11,13 +13,25 @@ enum GazeState: String, Sendable {
     case unknown = "Direction unavailable"
 }
 
+// MARK: - Gaze Detector
+
 final class GazeDetector {
+
     private let request = VNDetectFaceRectanglesRequest()
 
-    // Approximately 17 degrees
-    var yawThreshold: Double = 0.30
+    // Only accessed from the serial camera frame queue.
+    private var yawThreshold: Double = 0.30
+
+    // MARK: - Sensitivity
+
+    func setYawThreshold(_ value: Double) {
+        yawThreshold = min(max(value, 0.10), 0.60)
+    }
+
+    // MARK: - Analyze Camera Frame
 
     func analyze(_ pixelBuffer: CVPixelBuffer) -> GazeState {
+
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
             orientation: .up,
@@ -28,7 +42,8 @@ final class GazeDetector {
             try handler.perform([request])
 
             guard let face = request.results?.max(by: {
-                $0.boundingBox.width * $0.boundingBox.height <
+                $0.boundingBox.width * $0.boundingBox.height
+                    <
                 $1.boundingBox.width * $1.boundingBox.height
             }) else {
                 return .noFace

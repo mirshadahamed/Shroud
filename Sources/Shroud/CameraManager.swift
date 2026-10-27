@@ -4,7 +4,10 @@ import AVFoundation
 import Combine
 import CoreVideo
 
+// MARK: - Camera Errors
+
 private enum CameraError: LocalizedError {
+
     case cameraNotFound
     case cannotAddInput
     case cannotAddOutput
@@ -24,6 +27,29 @@ private enum CameraError: LocalizedError {
     }
 }
 
+// MARK: - Thread-Safe Sensitivity
+
+private final class SensitivityStore: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var storedValue: Double = 0.30
+
+    func set(_ value: Double) {
+        let clamped = min(max(value, 0.10), 0.60)
+
+        lock.lock()
+        storedValue = clamped
+        lock.unlock()
+    }
+
+    func get() -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+
+        return storedValue
+    }
+}
+
 // MARK: - Video Frame Receiver
 
 private final class FrameReceiver:
@@ -39,23 +65,40 @@ private final class FrameReceiver:
     private var lastAnalysis = Date.distantPast
     private var lastState: GazeState?
 
+    private let sensitivity: SensitivityStore
     private let onState: @Sendable (GazeState) -> Void
 
-    init(onState: @escaping @Sendable (GazeState) -> Void) {
+    init(
+        sensitivity: SensitivityStore,
+        onState: @escaping @Sendable (GazeState) -> Void
+    ) {
+        self.sensitivity = sensitivity
         self.onState = onState
     }
+
+    // MARK: - Reset
 
     func reset() {
         lock.lock()
         receivedFrame = false
         lock.unlock()
+
+        // Reset detection state on the frame queue
+        // before the next camera session starts.
+        lastAnalysis = .distantPast
+        lastState = nil
     }
+
+    // MARK: - Frame Status
 
     func hasReceivedFrame() -> Bool {
         lock.lock()
         defer { lock.unlock() }
+
         return receivedFrame
     }
+
+    // MARK: - Camera Frame Processing
 
     func captureOutput(
         _ output: AVCaptureOutput,
@@ -79,6 +122,12 @@ private final class FrameReceiver:
             return
         }
 
+        // Read the latest slider value safely.
+        let threshold = sensitivity.get()
+
+        // The detector is modified only on this queue.
+        detector.setYawThreshold(threshold)
+
         let state = detector.analyze(buffer)
 
         if state != lastState {
@@ -101,11 +150,20 @@ private actor CameraSessionActor {
 
     private var isConfigured = false
 
-    init(onState: @escaping @Sendable (GazeState) -> Void) {
-        receiver = FrameReceiver(onState: onState)
+    init(
+        sensitivity: SensitivityStore,
+        onState: @escaping @Sendable (GazeState) -> Void
+    ) {
+        receiver = FrameReceiver(
+            sensitivity: sensitivity,
+            onState: onState
+        )
     }
 
+    // MARK: - Start
+
     func start() throws {
+
         if !isConfigured {
             try configure()
         }
@@ -121,17 +179,24 @@ private actor CameraSessionActor {
         }
     }
 
+    // MARK: - Stop
+
     func stop() {
         if session.isRunning {
             session.stopRunning()
         }
     }
 
+    // MARK: - Frame Status
+
     func hasReceivedFrame() -> Bool {
         receiver.hasReceivedFrame()
     }
 
+    // MARK: - Configure Camera
+
     private func configure() throws {
+
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera],
             mediaType: .video,
@@ -179,6 +244,7 @@ private actor CameraSessionActor {
         }
 
         session.addOutput(output)
+
         isConfigured = true
     }
 }
@@ -188,12 +254,29 @@ private actor CameraSessionActor {
 @MainActor
 final class CameraManager: ObservableObject {
 
+    // MARK: - Published State
+
     @Published private(set) var isRunning = false
     @Published private(set) var status = "Camera stopped"
     @Published private(set) var gazeState = GazeState.unknown
 
-    private lazy var cameraSession = CameraSessionActor {
-        [weak self] state in
+    // MARK: - Sensitivity
+
+    private let sensitivity = SensitivityStore()
+
+    func setYawThreshold(_ value: Double) {
+        sensitivity.set(value)
+
+        print(
+            "Shroud: Head-turn threshold set to \(value)"
+        )
+    }
+
+    // MARK: - Camera Session
+
+    private lazy var cameraSession = CameraSessionActor(
+        sensitivity: sensitivity
+    ) { [weak self] state in
 
         Task { @MainActor [weak self] in
             guard let self, self.isRunning else {
@@ -204,15 +287,23 @@ final class CameraManager: ObservableObject {
         }
     }
 
+    // MARK: - Operation State
+
     private var operationTask: Task<Void, Never>?
     private var generation = 0
     private var wantsRunning = false
 
+    // MARK: - Start Camera
+
     func start() {
-        guard !wantsRunning else { return }
+
+        guard !wantsRunning else {
+            return
+        }
 
         wantsRunning = true
         generation += 1
+
         let currentGeneration = generation
 
         gazeState = .unknown
@@ -221,11 +312,14 @@ final class CameraManager: ObservableObject {
         operationTask?.cancel()
 
         operationTask = Task {
+
             let granted = await AVCaptureDevice
                 .requestAccess(for: .video)
 
             guard currentGeneration == generation,
-                  wantsRunning else { return }
+                  wantsRunning else {
+                return
+            }
 
             guard granted else {
                 wantsRunning = false
@@ -247,6 +341,7 @@ final class CameraManager: ObservableObject {
                 var received = false
 
                 for _ in 0..<20 {
+
                     if await cameraSession.hasReceivedFrame() {
                         received = true
                         break
@@ -272,12 +367,14 @@ final class CameraManager: ObservableObject {
                     status = "Camera active"
                 } else {
                     await cameraSession.stop()
+
                     wantsRunning = false
                     isRunning = false
                     status = "No camera frames received"
                 }
 
             } catch {
+
                 guard currentGeneration == generation else {
                     return
                 }
@@ -289,9 +386,13 @@ final class CameraManager: ObservableObject {
         }
     }
 
+    // MARK: - Stop Camera
+
     func stop() {
+
         wantsRunning = false
         generation += 1
+
         let currentGeneration = generation
 
         operationTask?.cancel()
@@ -301,6 +402,7 @@ final class CameraManager: ObservableObject {
         status = "Stopping camera..."
 
         operationTask = Task {
+
             await cameraSession.stop()
 
             guard currentGeneration == generation else {
