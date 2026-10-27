@@ -5,6 +5,19 @@ struct SettingsView: View {
 
     @ObservedObject var settings: ShroudSettings
 
+    @StateObject private var loginItem = LoginItemManager()
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: {
+                loginItem.isEnabled
+            },
+            set: { newValue in
+                loginItem.setEnabled(newValue)
+            }
+        )
+    }
+
     var body: some View {
 
         Form {
@@ -51,7 +64,6 @@ struct SettingsView: View {
                     "Overlay style",
                     selection: $settings.overlayStyle
                 ) {
-
                     ForEach(OverlayStyle.allCases) { style in
                         Text(style.title)
                             .tag(style)
@@ -109,6 +121,36 @@ struct SettingsView: View {
                 }
             }
 
+            // MARK: - Startup
+
+            Section("Startup") {
+
+                Toggle(
+                    "Launch Shroud at Login",
+                    isOn: launchAtLoginBinding
+                )
+
+                Text(
+                    "Automatically open Shroud in the menu bar when you sign in. Camera protection remains off until you start it."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if let errorMessage = loginItem.errorMessage {
+
+                    Label(
+                        errorMessage,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(
+                        horizontal: false,
+                        vertical: true
+                    )
+                }
+            }
+
             // MARK: - Emergency Shortcut
 
             Section("Emergency Protection") {
@@ -123,9 +165,12 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(
-            width: 480,
-            height: 480
+            width: 500,
+            height: 540
         )
+        .onAppear {
+            loginItem.refresh()
+        }
     }
 
     // MARK: - Style Description
