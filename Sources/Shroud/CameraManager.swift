@@ -4,6 +4,8 @@ import AVFoundation
 import Combine
 import CoreVideo
 
+// MARK: - Camera Errors
+
 private enum CameraError: LocalizedError {
     case cameraNotFound
     case cannotAddInput
@@ -24,6 +26,26 @@ private enum CameraError: LocalizedError {
     }
 }
 
+// MARK: - Thread-Safe Sensitivity
+
+private final class SensitivityStore: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var storedValue: Double = 0.30
+
+    func set(_ value: Double) {
+        lock.lock()
+        storedValue = min(max(value, 0.10), 0.60)
+        lock.unlock()
+    }
+
+    func get() -> Double {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedValue
+    }
+}
+
 // MARK: - Video Frame Receiver
 
 private final class FrameReceiver:
@@ -34,14 +56,19 @@ private final class FrameReceiver:
     private let lock = NSLock()
     private var receivedFrame = false
 
-    // Accessed only on the serial video frame queue.
+    // Accessed only on the serial camera frame queue.
     private let detector = GazeDetector()
     private var lastAnalysis = Date.distantPast
     private var lastState: GazeState?
 
+    private let sensitivity: SensitivityStore
     private let onState: @Sendable (GazeState) -> Void
 
-    init(onState: @escaping @Sendable (GazeState) -> Void) {
+    init(
+        sensitivity: SensitivityStore,
+        onState: @escaping @Sendable (GazeState) -> Void
+    ) {
+        self.sensitivity = sensitivity
         self.onState = onState
     }
 
@@ -79,6 +106,8 @@ private final class FrameReceiver:
             return
         }
 
+        detector.setYawThreshold(sensitivity.get())
+
         let state = detector.analyze(buffer)
 
         if state != lastState {
@@ -101,16 +130,20 @@ private actor CameraSessionActor {
 
     private var isConfigured = false
 
-    init(onState: @escaping @Sendable (GazeState) -> Void) {
-        receiver = FrameReceiver(onState: onState)
+    init(
+        sensitivity: SensitivityStore,
+        onState: @escaping @Sendable (GazeState) -> Void
+    ) {
+        receiver = FrameReceiver(
+            sensitivity: sensitivity,
+            onState: onState
+        )
     }
 
     func start() throws {
         if !isConfigured {
             try configure()
         }
-
-        receiver.reset()
 
         if !session.isRunning {
             session.startRunning()
@@ -146,9 +179,7 @@ private actor CameraSessionActor {
             throw CameraError.cameraNotFound
         }
 
-        let input = try AVCaptureDeviceInput(
-            device: camera
-        )
+        let input = try AVCaptureDeviceInput(device: camera)
 
         session.beginConfiguration()
         defer { session.commitConfiguration() }
@@ -192,11 +223,17 @@ final class CameraManager: ObservableObject {
     @Published private(set) var status = "Camera stopped"
     @Published private(set) var gazeState = GazeState.unknown
 
-    private lazy var cameraSession = CameraSessionActor {
-        [weak self] state in
+    private let sensitivity = SensitivityStore()
 
+    func setYawThreshold(_ value: Double) {
+        sensitivity.set(value)
+    }
+
+    private lazy var cameraSession = CameraSessionActor(
+        sensitivity: sensitivity
+    ) { [weak self] state in
         Task { @MainActor [weak self] in
-            guard let self, self.isRunning else {
+            guard let self, self.wantsRunning else {
                 return
             }
 
