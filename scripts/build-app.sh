@@ -1,43 +1,72 @@
-
 #!/bin/bash
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "Building Shroud..."
+CONFIGURATION="${1:-release}"
 
-# Build the Swift executable.
-swift build -c debug
-
-APP=".build/Shroud.app"
-CONTENTS="$APP/Contents"
-
-# Create the macOS app bundle directories.
-mkdir -p "$CONTENTS/MacOS"
-mkdir -p "$CONTENTS/Resources"
-
-# Copy the latest compiled executable.
-cp .build/debug/Shroud "$CONTENTS/MacOS/Shroud"
-
-# Copy the application metadata.
-cp Resources/Info.plist "$CONTENTS/Info.plist"
-
-# Copy the official Shroud application icon.
-if [ ! -f "Resources/Shroud.icns" ]; then
-    echo "Error: Resources/Shroud.icns not found."
+if [[ "$CONFIGURATION" != "debug" &&
+      "$CONFIGURATION" != "release" ]]; then
+    echo "Usage: $0 [debug|release]"
     exit 1
 fi
 
-cp Resources/Shroud.icns \
+echo "================================"
+echo "Shroud macOS Build"
+echo "Configuration: $CONFIGURATION"
+echo "================================"
+
+# Build the requested configuration.
+swift build -c "$CONFIGURATION"
+
+APP=".build/Shroud.app"
+CONTENTS="$APP/Contents"
+EXECUTABLE=".build/$CONFIGURATION/Shroud"
+
+if [[ ! -f "$EXECUTABLE" ]]; then
+    echo "Error: Executable not found: $EXECUTABLE"
+    exit 1
+fi
+
+if [[ ! -f "Resources/Info.plist" ]]; then
+    echo "Error: Info.plist not found."
+    exit 1
+fi
+
+if [[ ! -f "Resources/Shroud.icns" ]]; then
+    echo "Error: Shroud.icns not found."
+    exit 1
+fi
+
+# Remove the previous app bundle to prevent stale files.
+rm -rf "$APP"
+
+mkdir -p "$CONTENTS/MacOS"
+mkdir -p "$CONTENTS/Resources"
+
+# Copy executable and resources.
+cp "$EXECUTABLE" "$CONTENTS/MacOS/Shroud"
+cp "Resources/Info.plist" "$CONTENTS/Info.plist"
+cp "Resources/Shroud.icns" \
    "$CONTENTS/Resources/Shroud.icns"
 
-# Validate the Info.plist.
+chmod +x "$CONTENTS/MacOS/Shroud"
+
+# Validate bundle metadata.
 plutil -lint "$CONTENTS/Info.plist"
 
-# Ad-hoc sign the local development app.
-codesign --force --deep --sign - "$APP"
+# Development/testing signature only.
+# Public releases will use Developer ID and hardened runtime.
+codesign --force --sign - "$APP"
+
+# Verify the bundle signature.
+codesign --verify --strict --verbose=2 "$APP"
 
 echo ""
-echo "Shroud.app created successfully!"
-echo "Location: $APP"
-echo "App icon: Shroud.icns"
+echo "================================"
+echo "Shroud build completed"
+echo "================================"
+echo "Configuration: $CONFIGURATION"
+echo "App: $APP"
+echo "Signing: Ad-hoc (testing only)"
+echo ""
